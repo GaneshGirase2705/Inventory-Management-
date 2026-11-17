@@ -1,0 +1,98 @@
+# ==============================================================================
+# Docker Compose for Thermal Power Plant Store & Spares Management System (SMS)
+# Complete Multi-Container Local Orchestration with pgvector, Spring Boot & AI
+# ==============================================================================
+
+version: '3.8'
+
+services:
+  # ----------------------------------------------------------------------------
+  # 1. PostgreSQL 16 with pgvector Extension
+  # ----------------------------------------------------------------------------
+  sms-database:
+    image: pgvector/pgvector:pg16
+    container_name: sms-postgres
+    restart: always
+    environment:
+      POSTGRES_DB: sms_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - sms_pgdata:/var/lib/postgresql/data
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/01_schema.sql:ro
+      - ./database/data.sql:/docker-entrypoint-initdb.d/02_data.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d sms_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # ----------------------------------------------------------------------------
+  # 2. Python 3.11 FastAPI AI Microservice
+  # ----------------------------------------------------------------------------
+  sms-ai-service:
+    build:
+      context: ./ai-service
+      dockerfile: Dockerfile
+    container_name: sms-ai-service
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - PORT=8000
+      - DB_URL=postgresql+psycopg2://postgres:postgres@sms-database:5432/sms_db
+    depends_on:
+      sms-database:
+        condition: service_healthy
+
+  # ----------------------------------------------------------------------------
+  # 3. Java 21 Spring Boot 3 Backend Service
+  # ----------------------------------------------------------------------------
+  sms-backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: sms-backend
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - SPRING_PROFILES_ACTIVE=local
+      - DB_URL=jdbc:postgresql://sms-database:5432/sms_db
+      - DB_USER=postgres
+      - DB_PASS=postgres
+      - HIBERNATE_DDL=update
+      - JWT_SECRET=PowerPlantSmsThermalStoreSuperSecureSecretKey2026Exceeding256Bits!
+      - GCS_ENABLED=false
+      - AI_SERVICE_URL=http://sms-ai-service:8000
+    depends_on:
+      sms-database:
+        condition: service_healthy
+      sms-ai-service:
+        condition: service_started
+
+  # ----------------------------------------------------------------------------
+  # 4. React 18 + Nginx Frontend Application (Industrial Control Room UI)
+  # ----------------------------------------------------------------------------
+  sms-frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: sms-frontend
+    restart: unless-stopped
+    ports:
+      - "3000:8080"
+    environment:
+      - PORT=8080
+      - BACKEND_URL=http://sms-backend:8080/api/
+      - AI_SERVICE_URL=http://sms-ai-service:8000/api/v1/ai/
+    depends_on:
+      - sms-backend
+      - sms-ai-service
+
+volumes:
+  sms_pgdata:
+    driver: local
